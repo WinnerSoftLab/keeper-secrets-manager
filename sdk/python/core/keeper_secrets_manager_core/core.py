@@ -48,7 +48,6 @@ def find_secret_by_title(record_title, records):
     records = records or []
     return next((x for x in records if x.title == record_title), None)
 
-
 class SecretsManager:
 
     notation_prefix = "keeper"
@@ -530,6 +529,9 @@ class SecretsManager:
 
                 # The only non-exception exit from this method
                 return True
+            elif rs.status_code == 503:
+                self.logger.info("Keeper API limit, sleep for 200 ms")
+                time.sleep(0.2)
             else:
                 msg = "Error: {}, message={}".format(error, response_dict.get('message', "NA"))
 
@@ -987,10 +989,19 @@ class SecretsManager:
         return value
 
 
-class CachedSecretsManager(SecretsManager):
+class Singleton(type):
+    _instances = {}
+
+    def __call__(cls, *args, **kwargs):
+        if cls not in cls._instances:
+            cls._instances[cls] = super(type(cls), cls).__call__(*args, **kwargs)
+        return cls._instances[cls]
+
+class CachedSecretsManager(SecretsManager, metaclass=Singleton):
     cache_dir = pathlib.Path().resolve()
     cache_ttl = 3600
-    cache = None
+    cache = {}
+
     def __init__(self,
                  token=None, hostname=None, verify_ssl_certs=True, config=None, log_level=None,
                  custom_post_function=None, cache_dir=None, cache_ttl=None):
@@ -1001,8 +1012,10 @@ class CachedSecretsManager(SecretsManager):
         if cache_ttl is not None:
             self.cache_ttl = int(cache_ttl)
 
-        self.cache = {}
-        self._fill_cache()
+        if len(self.cache) == 0:
+            self._fill_cache()
+
+
 
     def _cache_get_value(self, uid):
         if uid in self.cache:
