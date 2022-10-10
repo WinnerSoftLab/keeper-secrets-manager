@@ -13,9 +13,11 @@ import hmac
 import logging
 import os
 import sys
+import time
 from distutils.util import strtobool
 import re
 import json
+import pathlib
 from http import HTTPStatus
 
 import requests
@@ -985,45 +987,76 @@ class SecretsManager:
         return value
 
 
-class KSMCache:
-    # Allow the directory that will contain the cache to be set with environment variables. If not set, the
-    # cache file will be create in the current working directory.
-    kms_cache_file_name = os.path.join(os.environ.get("KSM_CACHE_DIR", ""), 'ksm_cache.bin')
+class CachedSecretsManager(SecretsManager):
+    cache_dir = pathlib.Path().resolve()
+    cache_ttl = 3600
+    cache = None
+    def __init__(self,
+                 token=None, hostname=None, verify_ssl_certs=True, config=None, log_level=None,
+                 custom_post_function=None, cache_dir=None, cache_ttl=None):
+        super().__init__(token, hostname, verify_ssl_certs, config, log_level, custom_post_function)
 
-    @staticmethod
-    def save_cache(data):
-        cache_file = open(KSMCache.kms_cache_file_name, 'wb')
-        cache_file.write(data)
-        cache_file.close()
+        if cache_dir is not None:
+            self.cache_dir = str(cache_dir)
+        if cache_ttl is not None:
+            self.cache_ttl = int(cache_ttl)
 
-    @staticmethod
-    def get_cached_data():
-        cache_file = open(KSMCache.kms_cache_file_name, 'rb')
-        cache_data = cache_file.read()
-        cache_file.close()
-        return cache_data
+        self.cache = {}
+        self._fill_cache()
 
-    @staticmethod
-    def remove_cache_file():
-        if os.path.exists(KSMCache.kms_cache_file_name) is True:
-            os.unlink(KSMCache.kms_cache_file_name)
+    def _cache_get_value(self, uid):
+        if uid in self.cache:
+            return self.cache[uid]['data']
+        else:
+            return None
 
-    @staticmethod
-    def caching_post_function(url, transmission_key, encrypted_payload_and_signature, verify_ssl_certs=True):
+    def _cache_set_value(self, uid, data):
+        self.cache[uid] = {'data': data, 'date': time.time()}
+        return
 
-        try:
+    def _fill_cache(self):
+        secrets = self.get_secrets()
+        for secret in secrets:
+            self._cache_set_value(secret.uid, secret)
 
-            ksm_rs = SecretsManager.post_function(url, transmission_key, encrypted_payload_and_signature, verify_ssl_certs)
 
-            if ksm_rs.status_code == 200:
-                KSMCache.save_cache(transmission_key.key + ksm_rs.data)
-                return ksm_rs
-        except:
-            cached_data = KSMCache.get_cached_data()
-            cached_transmission_key = cached_data[:32]
-            transmission_key.key = cached_transmission_key
-            data = cached_data[32:len(cached_data)]
+    def get_secrets(self, uids=None, full_response=False):
+        """
+        Retrieve all records associated with the given application
+        """
 
-            ksm_rs = KSMHttpResponse(HTTPStatus.OK, data, None)
+        if isinstance(uids, str):
+            uids = [uids]
 
-        return ksm_rs
+        cache_miss = []
+        cache_hit = []
+        if uids != None and not full_response:
+            for uid in uids:
+                v = self._cache_get_value(uid)
+                if v is None:
+                    cache_miss.append(uid)
+                else:
+                    cache_hit.append(v)
+            if len(cache_miss) == 0:
+                return cache_hit
+            else:
+                uids = cache_miss
+
+
+        records_resp = self.fetch_and_decrypt_secrets(uids)
+
+        if records_resp.justBound:
+            records_resp = self.fetch_and_decrypt_secrets(uids)
+
+        # Log warnings we got from the server
+        # Will only be displayed if logging is enabled:
+        if records_resp.warnings:
+            for warning in records_resp.warnings:
+                self.logger.warning(warning)
+
+        if full_response:
+            return records_resp
+        else:
+            records = records_resp.records or []
+            records += cache_hit
+            return records

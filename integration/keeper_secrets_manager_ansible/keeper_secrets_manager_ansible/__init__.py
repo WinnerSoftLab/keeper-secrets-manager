@@ -31,8 +31,7 @@ try:
 except ImportError:
     KSM_SDK_ERR = traceback.format_exc()
 else:
-    from keeper_secrets_manager_core import SecretsManager
-    from keeper_secrets_manager_core.core import KSMCache
+    from keeper_secrets_manager_core import SecretsManager, CachedSecretsManager
     from keeper_secrets_manager_core.storage import FileKeyValueStorage, InMemoryKeyValueStorage
     from keeper_secrets_manager_core.utils import generate_password as sdk_generate_password
 
@@ -72,10 +71,6 @@ class KeeperAnsible:
     ENV_CACHE_DIR = "KSM_CACHE_DIR"
     DEFAULT_LOG_LEVEL = "ERROR"
     REDACT_MODULE_MATCH = r"\.keeper_redact$"
-
-    @staticmethod
-    def get_client(**kwargs):
-        return SecretsManager(**kwargs)
 
     @staticmethod
     def keeper_key(key):
@@ -139,32 +134,25 @@ class KeeperAnsible:
             if self.config_file is None:
                 self.config_file = FileKeyValueStorage.default_config_file_location
 
-            # Should we be using the cache?
             use_cache_key = KeeperAnsible.keeper_key(KeeperAnsible.KEY_USE_CACHE)
-            custom_post_function = None
-            if bool(strtobool(str(task_vars.get(use_cache_key, "False")))) is True:
-                custom_post_function = KSMCache.caching_post_function
-
-                # We are using the cache, what directory should the cache file be stored in.
-                cache_dir_key = KeeperAnsible.keeper_key(KeeperAnsible.KEY_CACHE_DIR)
-                if task_vars.get(cache_dir_key) is not None and os.environ.get(KeeperAnsible.ENV_CACHE_DIR) is None:
-                    os.environ[KeeperAnsible.ENV_CACHE_DIR] = task_vars.get(cache_dir_key)
-
-                display.vvv("Keeper Secrets Manager is using cache. Cache directory is {}.".format(
-                    os.environ.get(KeeperAnsible.ENV_CACHE_DIR)
-                    if os.environ.get(KeeperAnsible.ENV_CACHE_DIR) is not None else "current working directory"))
-
-                self.using_cache = True
-            else:
-                display.vvv("Keeper Secrets Manager is not using a cache.")
-
             if os.path.isfile(self.config_file) is True and force_in_memory is False:
                 display.vvv("Loading keeper config file file {}.".format(self.config_file))
-                self.client = KeeperAnsible.get_client(
-                    config=FileKeyValueStorage(config_file_location=self.config_file),
-                    log_level=log_level,
-                    custom_post_function=custom_post_function
-                )
+                if bool(strtobool(str(task_vars.get(use_cache_key, "False")))) is True:
+                    display.vvv("Keeper Secrets Manager is using cache. Cache directory is {}.".format(
+                        os.environ.get(KeeperAnsible.ENV_CACHE_DIR)
+                        if os.environ.get(KeeperAnsible.ENV_CACHE_DIR) is not None else "current working directory"))
+                    self.client = CachedSecretsManager(
+                        config=FileKeyValueStorage(config_file_location=self.config_file),
+                        log_level=log_level,
+                        custom_post_function=None
+                    )
+                else:
+                    display.vvv("Keeper Secrets Manager is not using a cache.")
+                    self.client = SecretsManager(
+                        config=FileKeyValueStorage(config_file_location=self.config_file),
+                        log_level=log_level,
+                        custom_post_function=None,
+                    )
 
             # Else config values in the Ansible variable.
             else:
@@ -239,12 +227,27 @@ class KeeperAnsible:
                     config_instance = FileKeyValueStorage(config_file_location=self.config_file)
                     config_instance.read_storage()
 
-                self.client = KeeperAnsible.get_client(
-                    config=config_instance,
-                    verify_ssl_certs=not ssl_certs_skip,
-                    log_level=log_level,
-                    custom_post_function=custom_post_function
-                )
+                if os.path.isfile(self.config_file) is True and force_in_memory is False:
+                    display.vvv("Loading keeper config file file {}.".format(self.config_file))
+                    if bool(strtobool(str(task_vars.get(use_cache_key, "False")))) is True:
+                        display.vvv("Keeper Secrets Manager is using cache. Cache directory is {}.".format(
+                            os.environ.get(KeeperAnsible.ENV_CACHE_DIR)
+                            if os.environ.get(
+                                KeeperAnsible.ENV_CACHE_DIR) is not None else "current working directory"))
+                        self.client = CachedSecretsManager(
+                            config=config_instance,
+                            verify_ssl_certs=not ssl_certs_skip,
+                            log_level=log_level,
+                            custom_post_function=None
+                        )
+                    else:
+                        display.vvv("Keeper Secrets Manager is not using a cache.")
+                        self.client = SecretsManager(
+                            config=config_instance,
+                            verify_ssl_certs=not ssl_certs_skip,
+                            log_level=log_level,
+                            custom_post_function=None,
+                        )
 
         except Exception as err:
             raise AnsibleError("Keeper Ansible error: {}".format(err))
@@ -551,7 +554,7 @@ class KeeperAnsible:
 
         # If we are using the cache, remove the cache file.
         if self.using_cache is True:
-            KSMCache.remove_cache_file()
+            # KSMCache.remove_cache_file()
             status["removed_ksm_cache"] = True
 
         return status
