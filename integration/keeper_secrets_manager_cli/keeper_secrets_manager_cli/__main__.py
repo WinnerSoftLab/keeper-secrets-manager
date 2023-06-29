@@ -51,6 +51,7 @@ class AliasedGroup(HelpColorsGroup):
         "export",
         "import",
         "init",
+        "setup",
         "sync",
         "secret",
         "totp",
@@ -117,7 +118,7 @@ class AliasedGroup(HelpColorsGroup):
 
             if best_score > 0.50:
                 cmd_name = best_command
-        return super().get_command(ctx, cmd_name)
+        return super().get_command(ctx, str(cmd_name))
 
     def parse_args(self, ctx, args: t.List[str]):
 
@@ -194,8 +195,8 @@ def base_command_help(f):
     doc = f.__doc__
 
     versions = get_versions()
-    cli_version = versions.get("keeper-secrets-manager-cli")
-    sdk_version = versions.get("keeper-secrets-manager-core")
+    cli_version = versions.get("keeper-secrets-manager-cli", "")
+    sdk_version = versions.get("keeper-secrets-manager-core", "")
 
     doc = "{} Version: {} ".format(
         Fore.RED + doc + Style.RESET_ALL,
@@ -270,9 +271,10 @@ class Mutex(click.Option):
 @click.option('--output', '-o', type=str, help='Output [stdout|stderr|filename]', default='stdout')
 @click.option('--color/--no-color', '-c/-nc', default=None, help="Use color in table views, where applicable.")
 @click.option('--cache/--no-cache', default=None, help="Enable/disable record caching.")
+@click.option('--log-level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR']), help="Debug log level.")
 @click.pass_context
 @base_command_help
-def cli(ctx, ini_file, profile_name, output, color, cache):
+def cli(ctx, ini_file, profile_name, output, color, cache, log_level):
     """Keeper Secrets Manager CLI
     """
 
@@ -283,17 +285,19 @@ def cli(ctx, ini_file, profile_name, output, color, cache):
             output=output,
             use_color=color,
             use_cache=cache,
-            global_config=global_config),
+            global_config=global_config,
+            log_level=log_level
+        ),
         "ini_file": ini_file,
         "profile_name": profile_name,
         "output": output,
         "use_color": color,
-        "use_cache": cache
+        "use_cache": cache,
+        "log_level": log_level
     }
 
 
 # PROFILE GROUP
-
 @click.group(
     name='profile',
     cls=AliasedGroup,
@@ -337,6 +341,97 @@ def profile_init_command(ctx, token, hostname, ini_file, profile_name, token_arg
         profile_name=profile_name,
         launched_from_app=global_config.launched_from_app
     )
+
+
+@click.command(
+    name='setup',
+    cls=HelpColorsCommand,
+    help_options_color='blue'
+)
+@click.option('--type', '-t', required=True, type=click.Choice(['aws']), help="The type of the remote storage: aws/azure/gcp - currently only aws is supported.")
+@click.option('--secret', '-s', required=False, type=str, default='ksm-config', help="Secret's name or full URI in Secrets Manager.")
+@click.option('--credentials', '-c', required=False, type=click.Choice(['ec2instance', 'profile', 'keys']), default='ec2instance', help="The type of the credentials for the remote storage. Default value is ec2instance")
+@click.option('--credentials-profile', '-n', required=False, type=str, help="Profile name from local machine config.")
+@click.option('--aws-access-key-id', required=False, type=str, help="AWS Access Key ID.")
+@click.option('--aws-secret-access-key', required=False, type=str, help="AWS Secret Access Key.")
+@click.option('--region', required=False, type=str, help="AWS region.")
+@click.option('--fallback', '-f', is_flag=False, help='If credentials fail then fallback to default profile on the machine.')
+@click.option('--ini-file', type=str, help="INI config file to create.")
+@click.option('--profile-name', '-p', type=str, help='Config profile to create.')
+@click.pass_context
+def profile_setup_command(ctx, type, secret, credentials,
+                          credentials_profile,
+                          aws_access_key_id, aws_secret_access_key, region,
+                          fallback, ini_file, profile_name):
+    """Setup a profile to load config from remote storage"""
+
+    # Since the top level options are available for all commands,
+    # it might be confusing the setup command
+    if ctx.obj["ini_file"] is not None and ini_file is not None:
+        print("NOTE: The INI file config was set on the top level command and"
+              " also set on the setup sub-command. The top level command"
+              " parameter will be ignored for the setup sub-command.",
+              file=sys.stderr)
+
+    if type == 'aws':
+        if not secret:
+            secret = 'ksm-config'
+        if not credentials:
+            credentials = 'ec2instance'
+
+        # credentials options
+        # ec2instance: doesn't require additional options
+        # profile: accepts only --credentials-profile=NAME
+        # keys: requires both keys and region
+        if credentials == 'ec2instance':
+            if (credentials_profile or
+                    aws_access_key_id or aws_secret_access_key or region):
+                raise click.ClickException(
+                    "Unexpected options for --credentials=ec2instance "
+                    "which doesn't require additional parameters. Please "
+                    "do not pass other settings (profile/key/region)")
+            Profile.from_aws_ec2instance(
+                secret=secret,
+                fallback=fallback,
+                ini_file=ini_file,
+                profile_name=profile_name,
+                launched_from_app=global_config.launched_from_app)
+        elif credentials == 'profile':
+            credentials_profile = credentials_profile or ""
+            # accepts only one optional parameter -cp|credentials-profile=NAME
+            if aws_access_key_id or aws_secret_access_key or region:
+                raise click.ClickException(
+                    "Unexpected options for --credentials=profile "
+                    "which accepts only one optional parameter "
+                    "--credentials-profile=NAME "
+                    "Please do not pass any keys (key/region)")
+            Profile.from_aws_profile(
+                secret=secret,
+                fallback=fallback,
+                aws_profile=credentials_profile,
+                ini_file=ini_file,
+                profile_name=profile_name,
+                launched_from_app=global_config.launched_from_app)
+        elif credentials == 'keys':
+            if credentials_profile:
+                raise click.ClickException(
+                    f"With --credentials-profile={credentials_profile} "
+                    "must specify option --credentials=profile")
+            # requires: aws-access-key-id, aws-secret-access-key, region
+            if not (aws_access_key_id and aws_secret_access_key and region):
+                raise click.ClickException(
+                    "Missing options for --credentials=keys "
+                    "which requires both keys and region to be set with "
+                    "--aws-access-key-id, --aws-secret-access-key, --region")
+            Profile.from_aws_custom(
+                secret=secret,
+                fallback=fallback,
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                region=region,
+                ini_file=ini_file,
+                profile_name=profile_name,
+                launched_from_app=global_config.launched_from_app)
 
 
 @click.command(
@@ -407,6 +502,7 @@ def profile_import_command(ctx, output_file, config_base64):
 
 
 profile_command.add_command(profile_init_command)
+profile_command.add_command(profile_setup_command)
 profile_command.add_command(profile_list_command)
 profile_command.add_command(profile_active_command)
 profile_command.add_command(profile_export_command)
@@ -414,8 +510,6 @@ profile_command.add_command(profile_import_command)
 
 
 # SECRET GROUP
-
-
 @click.group(
     name='secret',
     cls=AliasedGroup,
@@ -836,7 +930,6 @@ def exec_command(ctx, capture_output, inline, cmd):
 def config_command(ctx):
     """Configure the command line tool"""
     ctx.obj["profile"] = Profile(cli=ctx.obj["cli"], config=global_config)
-    pass
 
 
 @click.command(
@@ -1043,7 +1136,7 @@ def shell_command(app):
 
     versions = get_versions()
 
-    print(Fore.CYAN + "Current Version: " + Fore.GREEN + versions.get("keeper-secrets-manager-cli") + Style.RESET_ALL)
+    print(Fore.CYAN + "Current Version: " + Fore.GREEN + versions.get("keeper-secrets-manager-cli", "") + Style.RESET_ALL)
     update = update_available("keeper-secrets-manager-cli", versions)
     if update is not None:
         print(Fore.YELLOW + "Version {} is available.".format(update.available_version) + Style.RESET_ALL)
@@ -1067,7 +1160,6 @@ def quit_command():
 
 
 # SYNC COMMAND
-
 @click.command(
     name='sync',
     cls=HelpColorsCommand,
@@ -1076,9 +1168,9 @@ def quit_command():
 @click.option('--credentials', '-c', type=str, metavar="UID", help="Keeper record with credentials to access destination key/value store.",
     cls=Mutex,
     # not_required_if=[('type','json')],
-    required_if=[('type','azure'), ('type','aws')]
+    required_if=[('type','azure'), ('type','aws'), ('type','gcp')]
 )
-@click.option('--type', '-t', type=click.Choice(['aws', 'azure', 'json']), default='json', help="Type of the target key/value storage (aws, azure, json).", show_default=True)
+@click.option('--type', '-t', type=click.Choice(['aws', 'azure', 'gcp', 'json']), default='json', help="Type of the target key/value storage (aws, azure, gcp, json).", show_default=True)
 @click.option('--dry-run', '-n', is_flag=True, help='Perform a trial run with no changes made.')
 @click.option('--preserve-missing', '-p', is_flag=True, help='Preserve destination value when source value is deleted.')
 @click.option('--map', '-m', nargs=2, type=(str, str), multiple=True, required=True, metavar="<KEY NOTATION>...", help='Map destination key names to values using notation URI.')

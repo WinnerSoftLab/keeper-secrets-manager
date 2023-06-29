@@ -30,11 +30,11 @@ class FieldTypeTest(unittest.TestCase):
         self.assertEqual(4, d.get("digits"))
         self.assertEqual(0, d.get("special"))
 
-        # Uhm, so how a password is generate is up in the air. This is based on the Python SDK, which will use the
-        # counts over the length. So the password is going to be 9 characters, not 16 :/
+        # Uhm, so how a password is generated is up in the air. This is based on the Python SDK, which will use the
+        # length over the counts. So the password is going to be 16 characters, not 9
         pc = PasswordComplexity({"length": 16, "caps": 2, "lowercase": 3, "digits": 4, "special": 0})
         password = pc.generate_password()
-        self.assertEqual(9, len(password), "password is too short")
+        self.assertEqual(16, len(password), "password is too short")
 
     def test_password_filter(self):
 
@@ -54,7 +54,7 @@ class FieldTypeTest(unittest.TestCase):
         get_field_type_map()
 
         # Nice test to make sure we loaded all the fields, if we add more fields this will fail ... but in a good way.
-        self.assertEqual(30, len(field_map.keys()))
+        self.assertEqual(39, len(field_map.keys()))
 
         # Check if we get a Login class
         self.assertEqual(get_class_by_type("login"), Login)

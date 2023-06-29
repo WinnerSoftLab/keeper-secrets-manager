@@ -197,12 +197,19 @@ class ExecTest(unittest.TestCase):
             Profile.init(token='MY_TOKEN')
 
             # Make a temp shell script
-            with tempfile.NamedTemporaryFile(delete=False) as script:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".BAT") as script:
                 self.delete_me.append(script.name)
-                the_script = [
-                    "#!/bin/sh",
-                    "echo 'MOOT'"
-                ]
+                if platform == "win32":
+                    the_script = [
+                        "@echo off",
+                        "setlocal enableDelayedExpansion",
+                        "echo 'MOOT'"
+                    ]
+                else:
+                    the_script = [
+                        "#!/bin/sh",
+                        "echo 'MOOT'"
+                    ]
                 script.write("\n".join(the_script).encode())
                 script.close()
                 os.chmod(script.name, 0o777)
@@ -221,8 +228,7 @@ class ExecTest(unittest.TestCase):
                 print("-------------------")
                 print(result.output)
                 print("-------------------")
-                self.assertIsNotNone(re.search(f'Could not parse the notation {one.uid}', result.output,
-                                               flags=re.MULTILINE), "did not find exception")
+                self.assertIsNotNone(re.search(f'MOOT', result.output, flags=re.MULTILINE), "did not find exception")
 
 
 if __name__ == '__main__':

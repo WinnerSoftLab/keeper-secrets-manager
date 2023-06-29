@@ -6,8 +6,8 @@
 #              |_|
 #
 # Keeper Secrets Manager
-# Copyright 2021 Keeper Security Inc.
-# Contact: ops@keepersecurity.com
+# Copyright 2023 Keeper Security Inc.
+# Contact: sm@keepersecurity.com
 
 class Context:
 
@@ -46,6 +46,13 @@ class CreatePayload:
         self.data = None
 
 
+class DeletePayload:
+    def __init__(self):
+        self.clientVersion = None
+        self.clientId = None
+        self.recordUids = None
+
+
 class FileUploadPayload:
 
     def __init__(self):
@@ -68,6 +75,15 @@ class UpdatePayload:
         self.recordUid = None
         self.data = None
         self.revision = None
+        self.transactionType = None  # 'general' or 'rotation'
+
+
+class CompleteTransactionPayload:
+
+    def __init__(self):
+        self.clientVersion = None
+        self.clientId = None
+        self.recordUid = None
 
 
 class EncryptedPayload:

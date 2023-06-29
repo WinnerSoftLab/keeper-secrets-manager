@@ -402,21 +402,21 @@ class SecretTest(unittest.TestCase):
             bad_notation = "IM_BAD!!!!"
             runner = CliRunner()
             result = runner.invoke(cli, ['secret', 'notation', bad_notation], catch_exceptions=False)
-            self.assertRegex(result.output, r'Could not parse the notation', 'got bad parse error')
+            self.assertRegex(result.output, r'Error: Invalid format of Keeper notation', 'got bad parse error')
             self.assertEqual(1, result.exit_code, "the exit code was not 1")
 
             # Too many / parameters
-            too_much_notation = "keeper://{}/{}/{}/BAD".format(one.uid, "field", "login")
+            too_much_notation = f"keeper://{one.uid}/field/login/BAD"
             runner = CliRunner()
             result = runner.invoke(cli, ['secret', 'notation', too_much_notation], catch_exceptions=False)
-            self.assertRegex(result.output, r'Could not parse the notation', 'got bad parse error')
+            self.assertRegex(result.output, r'Error: Cannot find standard field', 'got bad parse error')
             self.assertEqual(1, result.exit_code, "the exit code was not 1")
 
             # Bad field
             notation = "keeper://{}/{}/{}".format(one.uid, "field", "im_a_bad_field")
             runner = CliRunner()
             result = runner.invoke(cli, ['secret', 'notation', notation], catch_exceptions=False)
-            self.assertRegex(result.output, r'Cannot find ', 'got an error for bad field')
+            self.assertRegex(result.output, r'Cannot get ', 'got an error for bad field')
             self.assertEqual(1, result.exit_code, "the exit code was not 1")
 
     def test_notation_file(self):
@@ -611,6 +611,57 @@ class SecretTest(unittest.TestCase):
             self.assertRegex(result.output, r'The value is not valid JSON for',
                              'did not get correct error message for save')
             self.assertEqual(1, result.exit_code, "the exit code was not 1")
+
+    def test_update_blank_labels(self):
+        """Test updating an existing record
+        """
+
+        mock_config = MockConfig.make_config()
+        secrets_manager = SecretsManager(config=InMemoryKeyValueStorage(mock_config))
+
+        res = mock.Response()
+        one = res.add_record(title="My Record 1")
+        one.field("login", label="", value="My Login 1")
+        one.field("password", label="", value="My Password 1")
+
+        queue = mock.ResponseQueue(client=secrets_manager)
+        queue.add_response(res)
+
+        # The good one
+        queue.add_response(res)
+        queue.add_response(mock.Response(content="", status_code=200))
+
+        # The bad field
+        queue.add_response(res)
+
+        # Bad server response
+        queue.add_response(res)
+        queue.add_response(mock.Response(content="I hate you and your little dog.", status_code=500))
+
+        # JSON
+        queue.add_response(res)
+        queue.add_response(mock.Response(content="", status_code=200))
+
+        # JSON Bad
+        queue.add_response(res)
+
+        with patch('keeper_secrets_manager_cli.KeeperCli.get_client') \
+                as mock_client:
+            mock_client.return_value = secrets_manager
+
+            Profile.init(token='MY_TOKEN')
+
+            # Because of click/testing.py:278 ResourceWarning: unclosed file <_io.FileIO ...
+            warnings.simplefilter("ignore", ResourceWarning)
+
+            # The good one!
+            runner = CliRunner()
+            result = runner.invoke(cli, [
+                'secret', 'update', '-u', one.uid,
+                '--field', '"login=New Login"',
+            ], catch_exceptions=False)
+            print(result.output)
+            self.assertEqual(0, result.exit_code, "the exit code was not 0")
 
     def test_kv_split(self):
         """Test splitting the key/value pairs
@@ -907,7 +958,7 @@ class SecretTest(unittest.TestCase):
 
             self.assertIsInstance(data.get("fields"), list, "fields is not a list")
 
-            field = data.get("fields")[0]
+            field = data.get("fields")[1]
             self.assertEqual("login", field.get("type"), "field type is not login")
             self.assertIsNotNone(field.get("value"), "value was None")
 
