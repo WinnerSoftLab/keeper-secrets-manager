@@ -54,6 +54,19 @@ def find_secret_by_title(record_title, records):
     records = records or []
     return next((x for x in records if x.title == record_title), None)
 
+
+class NotationSection:
+    def __init__(self, section: str):
+        self.section: str = section     # section name - ex. prefix
+        self.is_present: bool = False   # presence flag
+        self.start_pos: int = -1        # section start pos in URI
+        self.end_pos: int = -1          # section end pos in URI
+        self.text: Optional[Tuple[str, str]] = None       # [unescaped, raw] text
+        self.parameter: Optional[Tuple[str, str]] = None  # <field type>|<field label>|<file name>
+        self.index1: Optional[Tuple[str, str]] = None     # numeric index [N] or []
+        self.index2: Optional[Tuple[str, str]] = None     # property index - ex. field/name[0][middle]
+
+
 class SecretsManager:
 
     notation_prefix = "keeper"
